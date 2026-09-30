@@ -61,3 +61,29 @@ def test_reject_task_without_title() -> None:
     )
 
     assert response.status_code == 422
+
+def test_get_task_by_id() -> None:
+    client.post(
+        "/tasks",
+        json={
+            "title": "Aprender FastAPI",
+            "description": None,
+        },
+    )
+
+    response = client.get("/tasks/1")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": 1,
+        "title": "Aprender FastAPI",
+        "description": None,
+        "completed": False,
+    }
+
+
+def test_get_missing_task_returns_404() -> None:
+    response = client.get("/tasks/999")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Task not found"}

@@ -2,13 +2,15 @@ from fastapi.testclient import TestClient
 
 from app import main
 
+from app.database import Base, engine
+
 
 client = TestClient(main.app)
 
 
 def setup_function() -> None:
-    main.tasks.clear()
-    main.next_task_id = 1
+    Base.metadata.drop_all(bind=engine)
+    Base.metadata.create_all(bind=engine)
 
 
 def test_create_task() -> None:

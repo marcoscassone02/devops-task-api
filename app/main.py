@@ -1,26 +1,17 @@
-from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-from app.database import Base, engine, get_db
+from app.database import get_db
 from app.models import Task as TaskModel
 from app.schemas import Task as TaskSchema
 from app.schemas import TaskCreate, TaskUpdate
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    yield
-
-
 app = FastAPI(
     title="DevOps Task API",
     description="A small API used to practice production-ready DevOps workflows.",
-    version="0.1.0",
-    lifespan=lifespan,
+    version="0.1.0"
 )
 
 

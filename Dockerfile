@@ -10,6 +10,9 @@ RUN pip install --no-cache-dir --requirement requirements.txt
 
 COPY app ./app
 
+COPY alembic.ini .
+COPY migrations ./migrations
+
 FROM base AS test
 
 COPY requirements-dev.txt .

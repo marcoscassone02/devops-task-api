@@ -1,7 +1,5 @@
 from fastapi import FastAPI, HTTPException
-from app.schemas import Task, TaskCreate
-
-
+from app.schemas import Task, TaskCreate, TaskUpdate
 app = FastAPI(
     title="DevOps Task API",
     description="A small API used to practice production-ready DevOps workflows.",
@@ -42,6 +40,24 @@ def get_task(task_id: int) -> Task:
     for task in tasks:
         if task.id == task_id:
             return task
+
+    raise HTTPException(status_code=404, detail="Task not found")
+
+@app.patch("/tasks/{task_id}", response_model=Task, tags=["Tasks"])
+def update_task(task_id: int, task_data: TaskUpdate) -> Task:
+    for task in tasks:
+        if task.id == task_id:
+            task.completed = task_data.completed
+            return task
+
+    raise HTTPException(status_code=404, detail="Task not found")
+
+@app.delete("/tasks/{task_id}", status_code=204, tags=["Tasks"])
+def delete_task(task_id: int) -> None:
+    for index, task in enumerate(tasks):
+        if task.id == task_id:
+            tasks.pop(index)
+            return
 
     raise HTTPException(status_code=404, detail="Task not found")
 

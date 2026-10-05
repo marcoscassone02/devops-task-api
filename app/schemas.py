@@ -9,3 +9,6 @@ class TaskCreate(BaseModel):
 class Task(TaskCreate):
     id: int
     completed: bool = False
+
+class TaskUpdate(BaseModel):
+    completed: bool

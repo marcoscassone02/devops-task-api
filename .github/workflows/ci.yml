@@ -12,8 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: Run tests
+  quality:
+    name: Quality checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -27,6 +27,14 @@ jobs:
       - name: Run linter
         run: docker run --rm devops-task-api:test ruff check .
         
+      - name: Audit Python dependencies
+        run: >
+          docker run
+          --rm
+          devops-task-api:test
+          pip-audit
+          --requirement requirements.txt
+
       - name: Run test suite
         run: >
           docker run

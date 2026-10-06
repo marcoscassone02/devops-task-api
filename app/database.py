@@ -5,7 +5,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:

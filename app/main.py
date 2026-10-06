@@ -2,11 +2,11 @@
 from fastapi import Depends, FastAPI, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
 from app.database import get_db
 from app.models import Task as TaskModel
 from app.schemas import Task as TaskSchema
 from app.schemas import TaskCreate, TaskUpdate
-
 
 app = FastAPI(
     title="DevOps Task API",

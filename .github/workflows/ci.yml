@@ -24,6 +24,9 @@ jobs:
       - name: Build test image
         run: docker build --target test --tag devops-task-api:test .
 
+      - name: Run linter
+        run: docker run --rm devops-task-api:test ruff check .
+        
       - name: Run test suite
         run: >
           docker run

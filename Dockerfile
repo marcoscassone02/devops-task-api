@@ -18,6 +18,7 @@ FROM base AS test
 COPY requirements-dev.txt .
 RUN pip install --no-cache-dir --requirement requirements-dev.txt
 
+COPY ruff.toml .
 COPY tests ./tests
 
 CMD ["python", "-m", "pytest", "-q"]

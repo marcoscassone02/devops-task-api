@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Run tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Build test image
+        run: docker build --target test --tag devops-task-api:test .
+
+      - name: Run test suite
+        run: >
+          docker run
+          --rm
+          --env DATABASE_URL=sqlite+pysqlite:///:memory:
+          devops-task-api:test

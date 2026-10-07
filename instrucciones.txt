@@ -1,0 +1,638 @@
+# Guía de estudio y operación de DevOps Task API
+
+Este documento resume para qué sirve cada tecnología del proyecto y reúne los
+comandos principales. Los comandos se ejecutan desde la raíz del repositorio.
+
+## 1. Arquitectura actual
+
+```text
+Cliente
+  |
+  v
+FastAPI + Uvicorn (servicio api)
+  |
+  v
+SQLAlchemy + Psycopg
+  |
+  v
+PostgreSQL 16 (servicio db)
+  |
+  v
+Volumen persistente postgres_data
+
+Antes de iniciar api:
+
+PostgreSQL healthy
+  -> Alembic upgrade head (servicio migrate)
+  -> FastAPI
+```
+
+Docker Compose coordina cuatro servicios:
+
+- `api`: ejecuta FastAPI con Uvicorn.
+- `db`: ejecuta PostgreSQL 16.
+- `migrate`: aplica las migraciones de Alembic y termina.
+- `test`: ejecuta las herramientas de calidad y los tests.
+
+## 2. Tecnologías y responsabilidades
+
+### Python
+
+Lenguaje con el que está escrita la aplicación. La imagen utiliza Python 3.12.
+
+### FastAPI
+
+Framework que define los endpoints HTTP, valida las peticiones y genera la
+documentación interactiva disponible en `/docs`.
+
+### Uvicorn
+
+Servidor que mantiene la aplicación FastAPI escuchando peticiones HTTP. El
+contenedor de la API lo ejecuta con:
+
+```bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+### Pydantic
+
+Valida los datos que entran y salen de la API. Por ejemplo, comprueba que el
+título de una tarea exista y respete su longitud máxima.
+
+### SQLAlchemy
+
+ORM y toolkit de base de datos. Permite representar tablas como clases Python y
+construir consultas sin escribir todo el SQL manualmente.
+
+### Psycopg
+
+Driver que permite que SQLAlchemy y Python se comuniquen con PostgreSQL.
+
+### PostgreSQL
+
+Base de datos relacional que guarda las tareas. El servicio utiliza la imagen
+oficial `postgres:16-alpine`.
+
+### Alembic y las migraciones
+
+Alembic administra la evolución del esquema de la base de datos.
+
+Una migración es un archivo versionado que describe un cambio de esquema, por
+ejemplo:
+
+- crear la tabla `tasks`;
+- agregar una columna `priority`;
+- crear un índice;
+- modificar una restricción.
+
+Los modelos de SQLAlchemy describen cómo debería verse el esquema actual. Las
+migraciones explican cómo transformar una base existente desde una versión a la
+siguiente.
+
+La tabla `alembic_version` registra qué revisión ya fue aplicada. La primera
+revisión del proyecto es `fcbd5f880c30`.
+
+Se eliminó `Base.metadata.create_all()` del inicio de FastAPI porque no conserva
+un historial de cambios ni permite controlar de forma segura la evolución del
+esquema. Alembic es ahora la única autoridad para modificarlo.
+
+### Docker
+
+Empaqueta la aplicación y sus dependencias en imágenes reproducibles.
+
+- Imagen: plantilla inmutable construida desde el Dockerfile.
+- Contenedor: proceso en ejecución creado desde una imagen.
+- Volumen: almacenamiento persistente separado del contenedor.
+- Red: permite que los contenedores se encuentren por nombre.
+
+### Docker Compose
+
+Declara y coordina varios contenedores, sus redes, variables, volúmenes, health
+checks y orden de inicio. Automatiza los pasos manuales de Docker documentados
+más adelante.
+
+### pytest y HTTPX
+
+`pytest` ejecuta los tests. HTTPX permite que `TestClient` simule peticiones a
+FastAPI. Los tests usan SQLite en memoria y no modifican PostgreSQL.
+
+### Ruff
+
+Linter que analiza el código sin ejecutarlo. Detecta imports desordenados,
+código sin usar, sintaxis obsoleta y otros problemas estáticos.
+
+### pip-audit
+
+Compara las dependencias Python con bases de vulnerabilidades conocidas. No
+analiza nuestro código ni garantiza que una dependencia sea segura frente a
+vulnerabilidades todavía desconocidas.
+
+### Git y GitHub
+
+Git conserva el historial local. GitHub aloja el repositorio remoto y permite
+trabajar mediante ramas y pull requests.
+
+### GitHub Actions
+
+Ejecuta el pipeline de CI en una máquina virtual limpia ante pull requests y
+pushes a `main`. El pipeline construye la imagen de test y ejecuta Ruff,
+pip-audit y pytest.
+
+## 3. Archivos de dependencias
+
+`requirements.txt` contiene lo necesario para ejecutar la API y las migraciones
+en producción:
+
+```text
+FastAPI, Uvicorn, SQLAlchemy, Psycopg y Alembic
+```
+
+`requirements-dev.txt` incluye `requirements.txt` y agrega herramientas de
+desarrollo:
+
+```text
+HTTPX, pytest, Ruff y pip-audit
+```
+
+La imagen `runtime` solo instala dependencias de producción. La imagen `test`
+también instala las de desarrollo.
+
+## 4. Primera ejecución con Docker Compose
+
+Crear el archivo local de configuración:
+
+```bash
+cp .env.example .env
+```
+
+Editar `.env` y reemplazar la contraseña de ejemplo. Nunca confirmar `.env` en
+Git.
+
+Construir y levantar todo en segundo plano:
+
+```bash
+docker compose up --build --detach
+```
+
+Compose realiza automáticamente:
+
+```text
+crear red
+  -> crear volumen
+  -> iniciar PostgreSQL
+  -> esperar su health check
+  -> ejecutar alembic upgrade head
+  -> iniciar API
+```
+
+Comprobar los servicios:
+
+```bash
+docker compose ps --all
+```
+
+Probar la API:
+
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/tasks
+```
+
+Abrir la documentación:
+
+```text
+http://localhost:8000/docs
+```
+
+## 5. Comandos habituales de Docker Compose
+
+Construir las imágenes:
+
+```bash
+docker compose build
+```
+
+Levantar o reconstruir los servicios:
+
+```bash
+docker compose up --build --detach
+```
+
+Ver su estado:
+
+```bash
+docker compose ps --all
+```
+
+Seguir logs:
+
+```bash
+docker compose logs --follow api
+docker compose logs --follow migrate
+docker compose logs --follow db
+```
+
+Reiniciar únicamente la API:
+
+```bash
+docker compose restart api
+```
+
+Detener y eliminar contenedores y red, conservando la base:
+
+```bash
+docker compose down
+```
+
+Eliminar también el volumen y todos los datos locales de PostgreSQL:
+
+```bash
+docker compose down --volumes
+```
+
+> **Peligro:** `--volumes` elimina la base persistente. Usarlo solamente cuando
+> se quiera empezar desde cero o se tenga un backup válido.
+
+## 6. Imágenes, contenedores y targets del Dockerfile
+
+El Dockerfile tiene una etapa compartida y dos targets:
+
+```text
+base
+├── runtime: API y migraciones
+└── test: Ruff, pip-audit y pytest
+```
+
+Construir la imagen de producción:
+
+```bash
+docker build --target runtime --tag devops-task-api:local .
+```
+
+Construir la imagen de tests:
+
+```bash
+docker build --target test --tag devops-task-api:test .
+```
+
+Listar imágenes:
+
+```bash
+docker image ls
+```
+
+Listar contenedores activos y detenidos:
+
+```bash
+docker container ls --all
+```
+
+El target `runtime` ejecuta Uvicorn por defecto. El target `test` ejecuta pytest
+por defecto. Un comando pasado a `docker run` reemplaza temporalmente ese
+`CMD`.
+
+## 7. Crear manualmente red, volumen, base y API
+
+Compose es la vía recomendada. Estos pasos manuales sirven para entender qué
+automatiza.
+
+Crear una red:
+
+```bash
+docker network create devops-task-network
+```
+
+Crear un volumen persistente:
+
+```bash
+docker volume create devops-task-postgres-data
+```
+
+Crear PostgreSQL conectado a la red y al volumen:
+
+```bash
+docker run --detach \
+  --name devops-task-db \
+  --network devops-task-network \
+  --env POSTGRES_DB=task_db \
+  --env POSTGRES_USER=task_user \
+  --env POSTGRES_PASSWORD=change-me \
+  --volume devops-task-postgres-data:/var/lib/postgresql/data \
+  postgres:16-alpine
+```
+
+Esperar hasta que PostgreSQL acepte conexiones:
+
+```bash
+docker exec devops-task-db \
+  pg_isready --username task_user --dbname task_db
+```
+
+Construir la imagen runtime:
+
+```bash
+docker build --target runtime --tag devops-task-api:local .
+```
+
+Aplicar las migraciones antes de iniciar la API:
+
+```bash
+docker run --rm \
+  --network devops-task-network \
+  --env DATABASE_URL=postgresql+psycopg://task_user:change-me@devops-task-db:5432/task_db \
+  devops-task-api:local \
+  alembic upgrade head
+```
+
+Crear el contenedor de la API:
+
+```bash
+docker run --detach \
+  --name devops-task-api \
+  --network devops-task-network \
+  --publish 8000:8000 \
+  --env DATABASE_URL=postgresql+psycopg://task_user:change-me@devops-task-db:5432/task_db \
+  devops-task-api:local
+```
+
+Probarlo:
+
+```bash
+curl http://localhost:8000/health
+```
+
+Detener y eliminar esos contenedores manuales sin borrar el volumen:
+
+```bash
+docker rm --force devops-task-api
+docker rm --force devops-task-db
+docker network rm devops-task-network
+```
+
+Eliminar manualmente el volumen y los datos, solamente si se desea empezar de
+cero:
+
+```bash
+docker volume rm devops-task-postgres-data
+```
+
+> **Peligro:** el último comando elimina permanentemente la base guardada en ese
+> volumen.
+
+## 8. PostgreSQL y el volumen
+
+Compose monta el volumen lógico `postgres_data` en:
+
+```text
+/var/lib/postgresql/data
+```
+
+Los contenedores pueden eliminarse y recrearse sin perder las tareas porque los
+archivos de PostgreSQL viven en el volumen.
+
+Listar volúmenes:
+
+```bash
+docker volume ls
+```
+
+Inspeccionar el volumen del proyecto:
+
+```bash
+docker volume inspect devops-task-api_postgres_data
+```
+
+El nombre real puede cambiar si se usa otro nombre de proyecto con `docker
+compose -p`. Confirmarlo siempre con `docker volume ls`.
+
+Abrir una consola de PostgreSQL:
+
+```bash
+docker compose exec db sh -c \
+  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+```
+
+Dentro de `psql`:
+
+```sql
+\dt
+SELECT * FROM tasks;
+SELECT * FROM alembic_version;
+\q
+```
+
+Las variables `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PASSWORD` solo
+inicializan una base vacía. Cambiarlas en `.env` no reconfigura automáticamente
+un volumen que ya contiene PostgreSQL.
+
+## 9. Flujo de migraciones con Alembic
+
+Primero modificar el modelo SQLAlchemy. Después generar una migración:
+
+```bash
+docker compose run --rm migrate \
+  alembic revision --autogenerate -m "describe schema change"
+```
+
+Revisar manualmente el nuevo archivo de `migrations/versions/`. Autogenerate es
+una ayuda, no una garantía de que la migración represente correctamente la
+intención.
+
+Aplicar todas las migraciones pendientes:
+
+```bash
+docker compose run --rm migrate
+```
+
+El comando anterior usa el comando predeterminado del servicio:
+
+```bash
+alembic upgrade head
+```
+
+Consultar revisión e historial:
+
+```bash
+docker compose run --rm migrate alembic current
+docker compose run --rm migrate alembic history
+docker compose run --rm migrate alembic heads
+```
+
+Retroceder una migración en desarrollo:
+
+```bash
+docker compose run --rm migrate alembic downgrade -1
+```
+
+> Un downgrade puede eliminar columnas o datos. Revisar la función `downgrade`
+> y tener backup antes de usarlo sobre una base importante.
+
+### Adoptar una base creada antes de Alembic
+
+Si la tabla ya existe y se verificó que coincide exactamente con la migración:
+
+```bash
+docker compose run --rm migrate alembic stamp head
+```
+
+`stamp head` solo escribe la revisión en `alembic_version`: no crea ni modifica
+tablas. No se usa en instalaciones nuevas; allí corresponde `upgrade head`.
+
+## 10. Tests, linting y seguridad
+
+Ejecutar pytest mediante Compose:
+
+```bash
+docker compose run --rm --build test
+```
+
+Construir una vez la imagen de calidad:
+
+```bash
+docker build --target test --tag devops-task-api:test .
+```
+
+Ejecutar Ruff:
+
+```bash
+docker run --rm devops-task-api:test ruff check .
+```
+
+Aplicar fixes seguros de Ruff sobre el repositorio y conservar el propietario de
+los archivos:
+
+```bash
+docker run --rm \
+  --user "$(id -u):$(id -g)" \
+  --volume "$PWD:/workspace" \
+  --workdir /workspace \
+  devops-task-api:test \
+  ruff check --fix --no-cache .
+```
+
+Revisar siempre `git diff` después de un autofix.
+
+Auditar dependencias de producción:
+
+```bash
+docker run --rm \
+  devops-task-api:test \
+  pip-audit --requirement requirements.txt
+```
+
+Ejecutar pytest directamente desde la imagen:
+
+```bash
+docker run --rm \
+  --env DATABASE_URL=sqlite+pysqlite:///:memory: \
+  devops-task-api:test
+```
+
+## 11. Git, ramas y pull requests
+
+Actualizar `main` y crear una rama para una tarea:
+
+```bash
+git switch main
+git pull --ff-only
+git switch -c tipo/descripcion-corta
+```
+
+Ejemplos de prefijos:
+
+- `feat/`: nueva funcionalidad.
+- `fix/`: corrección.
+- `ci/`: pipeline y automatización.
+- `docs/`: documentación.
+- `chore/`: mantenimiento.
+
+Revisar y confirmar cambios:
+
+```bash
+git status
+git diff
+git add archivo1 archivo2
+git commit -m "tipo: descripcion"
+git push -u origin tipo/descripcion-corta
+```
+
+Crear un pull request:
+
+```bash
+gh pr create --base main --head tipo/descripcion-corta
+```
+
+Después de fusionarlo:
+
+```bash
+git switch main
+git pull --ff-only
+git push origin --delete tipo/descripcion-corta
+git branch -d tipo/descripcion-corta
+```
+
+## 12. GitHub Actions
+
+El workflow está en `.github/workflows/ci.yml` y se ejecuta cuando:
+
+- hay un push a `main`;
+- se abre o actualiza un pull request dirigido a `main`.
+
+Un push a una rama sin pull request no activa el workflow actual.
+
+Consultar ejecuciones recientes:
+
+```bash
+gh run list
+```
+
+Ver una ejecución y sus logs:
+
+```bash
+gh run view RUN_ID
+gh run view RUN_ID --log-failed
+```
+
+## 13. Diagnóstico rápido
+
+Ver todos los servicios y códigos de salida:
+
+```bash
+docker compose ps --all
+```
+
+Si la API no inicia:
+
+```bash
+docker compose logs migrate
+docker compose logs api
+```
+
+Si aparece `table tasks already exists`, comprobar si se está intentando aplicar
+la primera migración sobre una base preexistente que todavía no fue registrada.
+No ejecutar `stamp` sin verificar primero que el esquema coincida.
+
+Si se modificaron requirements o el Dockerfile, reconstruir:
+
+```bash
+docker compose build --no-cache
+```
+
+Si el puerto 8000 está ocupado:
+
+```bash
+docker container ls
+```
+
+## 14. Despliegue local y futuro despliegue cloud
+
+Actualmente el proyecto puede desplegarse localmente de forma reproducible con:
+
+```bash
+docker compose up --build --detach
+```
+
+Eso todavía no es un despliegue cloud. Las siguientes etapas del proyecto
+agregarán un registry de imágenes, infraestructura como código, secretos cloud,
+base administrada, observabilidad y un mecanismo de despliegue remoto.
+

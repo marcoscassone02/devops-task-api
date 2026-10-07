@@ -41,3 +41,23 @@ jobs:
           --rm
           --env DATABASE_URL=sqlite+pysqlite:///:memory:
           devops-task-api:test
+
+      - name: Build runtime image
+        run: >
+          docker build
+          --target runtime
+          --tag devops-task-api:runtime
+          .
+
+      - name: Scan runtime image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 
+        with:
+          image-ref: devops-task-api:runtime
+          scan-type: image
+          scanners: vuln
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          version: v0.74.0

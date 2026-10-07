@@ -5,6 +5,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+LABEL org.opencontainers.image.source="https://github.com/marcoscassone02/devops-task-api"
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir --requirement requirements.txt
 

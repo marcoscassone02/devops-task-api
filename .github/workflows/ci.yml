@@ -16,7 +16,8 @@ jobs:
     name: Quality checks
     runs-on: ubuntu-latest
     timeout-minutes: 10
-
+  
+    
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -61,3 +62,37 @@ jobs:
           exit-code: "1"
           format: table
           version: v0.74.0
+
+  publish:
+    name: Publish runtime image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - quality
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build runtime image
+        run: >
+          docker build
+          --target runtime
+          --tag ghcr.io/${{ github.repository }}:${{ github.sha }}
+          --tag ghcr.io/${{ github.repository }}:latest
+          .
+
+      - name: Push runtime image
+        run: |
+          docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
+          docker push ghcr.io/${{ github.repository }}:latest

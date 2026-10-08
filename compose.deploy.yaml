@@ -1,0 +1,11 @@
+services:
+  api:
+    image: ghcr.io/marcoscassone02/devops-task-api:${IMAGE_TAG:-latest}
+    pull_policy: always
+    build: !reset null
+    restart: unless-stopped
+
+  migrate:
+    image: ghcr.io/marcoscassone02/devops-task-api:${IMAGE_TAG:-latest}
+    pull_policy: always
+    build: !reset null

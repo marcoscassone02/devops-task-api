@@ -34,6 +34,23 @@ Docker Compose coordina cuatro servicios:
 - `migrate`: aplica las migraciones de Alembic y termina.
 - `test`: ejecuta las herramientas de calidad y los tests.
 
+El proyecto también tiene un flujo automatizado de integración y publicación:
+
+```text
+Pull request hacia main
+  -> Ruff
+  -> pip-audit
+  -> pytest
+  -> construir imagen runtime
+  -> Trivy
+
+Push a main
+  -> repetir controles de calidad
+  -> publicar imagen runtime en GHCR
+     ├── etiqueta latest
+     └── etiqueta con el SHA del commit
+```
+
 ## 2. Tecnologías y responsabilidades
 
 ### Python
@@ -127,6 +144,16 @@ Compara las dependencias Python con bases de vulnerabilidades conocidas. No
 analiza nuestro código ni garantiza que una dependencia sea segura frente a
 vulnerabilidades todavía desconocidas.
 
+### Trivy
+
+Escáner de seguridad para imágenes de contenedor. En el pipeline revisa la
+imagen `runtime` en busca de vulnerabilidades conocidas de severidad `HIGH` y
+`CRITICAL`, tanto en paquetes del sistema operativo como en librerías.
+
+Actualmente ignora vulnerabilidades que todavía no tienen una corrección
+disponible. Si encuentra una vulnerabilidad corregible dentro de esas
+severidades, el job falla y la imagen no se publica.
+
 ### Git y GitHub
 
 Git conserva el historial local. GitHub aloja el repositorio remoto y permite
@@ -135,8 +162,29 @@ trabajar mediante ramas y pull requests.
 ### GitHub Actions
 
 Ejecuta el pipeline de CI en una máquina virtual limpia ante pull requests y
-pushes a `main`. El pipeline construye la imagen de test y ejecuta Ruff,
-pip-audit y pytest.
+pushes a `main`. El job `quality` construye la imagen de test, ejecuta Ruff,
+pip-audit y pytest, construye la imagen `runtime` y la analiza con Trivy.
+
+El job `publish` se ejecuta solamente después de un push a `main` y únicamente
+si `quality` terminó correctamente. Construye la imagen `runtime` y la publica
+en GitHub Container Registry.
+
+### GitHub Container Registry (GHCR)
+
+Registro de imágenes de contenedor integrado con GitHub. Guarda la imagen
+lista para ejecutar sin necesidad de construirla nuevamente desde el código
+fuente.
+
+La imagen del proyecto se publica como:
+
+```text
+ghcr.io/marcoscassone02/devops-task-api
+```
+
+Se generan dos etiquetas:
+
+- `latest`: versión más reciente publicada desde `main`.
+- SHA del commit: versión exacta e inmutable asociada a un commit de Git.
 
 ## 3. Archivos de dependencias
 
@@ -168,7 +216,7 @@ cp .env.example .env
 Editar `.env` y reemplazar la contraseña de ejemplo. Nunca confirmar `.env` en
 Git.
 
-Construir y levantar todo en segundo plano:
+Construir y levantar la aplicación en segundo plano:
 
 ```bash
 docker compose up --build --detach
@@ -184,6 +232,9 @@ crear red
   -> ejecutar alembic upgrade head
   -> iniciar API
 ```
+
+El servicio `test` no se inicia con este comando porque pertenece al perfil
+`test`. Se ejecuta de forma explícita con los comandos de la sección 10.
 
 Comprobar los servicios:
 
@@ -580,6 +631,27 @@ El workflow está en `.github/workflows/ci.yml` y se ejecuta cuando:
 
 Un push a una rama sin pull request no activa el workflow actual.
 
+El workflow contiene dos jobs:
+
+```text
+quality
+  -> Ruff
+  -> pip-audit
+  -> pytest
+  -> build de runtime
+  -> Trivy
+
+publish
+  -> solo en push a main
+  -> espera que quality finalice correctamente
+  -> inicia sesión en GHCR con GITHUB_TOKEN
+  -> publica latest y el SHA del commit
+```
+
+En un pull request se ejecuta `quality`, pero no se publica ninguna imagen.
+Después de fusionar el pull request, el push resultante a `main` ejecuta
+`quality` y, si todo pasa, ejecuta `publish`.
+
 Consultar ejecuciones recientes:
 
 ```bash
@@ -593,7 +665,98 @@ gh run view RUN_ID
 gh run view RUN_ID --log-failed
 ```
 
-## 13. Diagnóstico rápido
+Ver el paquete publicado desde el navegador:
+
+```text
+https://github.com/marcoscassone02/devops-task-api/pkgs/container/devops-task-api
+```
+
+Descargar la última imagen publicada:
+
+```bash
+docker pull ghcr.io/marcoscassone02/devops-task-api:latest
+```
+
+Comprobar que quedó guardada localmente:
+
+```bash
+docker image ls ghcr.io/marcoscassone02/devops-task-api
+```
+
+## 13. Ejecutar la imagen publicada
+
+`compose.deploy.yaml` es un archivo de override. No reemplaza a `compose.yaml`:
+Docker Compose combina ambos archivos.
+
+El archivo base sigue aportando PostgreSQL, el volumen, las variables, los
+health checks, las dependencias y los comandos. El override cambia solamente
+`api` y `migrate` para que usen la imagen publicada en GHCR.
+
+Sus instrucciones principales significan:
+
+- `image`: selecciona la imagen publicada.
+- `${IMAGE_TAG:-latest}`: usa `latest` si no se proporciona otra etiqueta.
+- `pull_policy: always`: comprueba la imagen remota cada vez que se levanta.
+- `build: !reset null`: elimina el `build` heredado y evita construir localmente.
+- `restart: unless-stopped`: reinicia la API salvo que se detenga manualmente.
+
+Levantar un entorno separado usando la imagen publicada:
+
+```bash
+docker compose \
+  -p devops-task-deploy \
+  -f compose.yaml \
+  -f compose.deploy.yaml \
+  up --detach
+```
+
+El orden es:
+
+```text
+descargar imagen de GHCR
+  -> iniciar PostgreSQL
+  -> esperar health check
+  -> ejecutar alembic upgrade head con migrate
+  -> iniciar API usando la misma imagen
+```
+
+Ver el estado y los logs de este entorno:
+
+```bash
+docker compose -p devops-task-deploy -f compose.yaml -f compose.deploy.yaml ps --all
+docker compose -p devops-task-deploy -f compose.yaml -f compose.deploy.yaml logs migrate
+docker compose -p devops-task-deploy -f compose.yaml -f compose.deploy.yaml logs api
+```
+
+Detenerlo conservando el volumen de PostgreSQL:
+
+```bash
+docker compose \
+  -p devops-task-deploy \
+  -f compose.yaml \
+  -f compose.deploy.yaml \
+  down
+```
+
+### Desplegar una versión exacta
+
+Para un entorno real es preferible usar la etiqueta con el SHA del commit en
+vez de `latest`. Así se sabe exactamente qué versión está ejecutándose y se
+puede volver a una versión anterior.
+
+```bash
+IMAGE_TAG=SHA_DEL_COMMIT docker compose \
+  -p devops-task-deploy \
+  -f compose.yaml \
+  -f compose.deploy.yaml \
+  up --detach
+```
+
+Este paso simula un despliegue, pero todavía ocurre en la computadora local. La
+imagen viene del registro remoto; PostgreSQL, la red y los contenedores siguen
+ejecutándose localmente.
+
+## 14. Diagnóstico rápido
 
 Ver todos los servicios y códigos de salida:
 
@@ -618,21 +781,47 @@ Si se modificaron requirements o el Dockerfile, reconstruir:
 docker compose build --no-cache
 ```
 
+Si falla la descarga de GHCR, comprobar que el paquete exista y que su
+visibilidad permita descargarlo. Si es privado, iniciar sesión:
+
+```bash
+docker login ghcr.io
+```
+
+Si el puerto 8000 ya está ocupado, verificar que el entorno normal y el de
+despliegue no estén levantados al mismo tiempo:
+
+```bash
+docker compose ps --all
+docker compose -p devops-task-deploy -f compose.yaml -f compose.deploy.yaml ps --all
+```
+
 Si el puerto 8000 está ocupado:
 
 ```bash
 docker container ls
 ```
 
-## 14. Despliegue local y futuro despliegue cloud
+## 15. Estado actual y futuro despliegue cloud
 
-Actualmente el proyecto puede desplegarse localmente de forma reproducible con:
+Actualmente existen dos formas de ejecutarlo localmente:
 
 ```bash
+# Desarrollo: construir desde el código local
 docker compose up --build --detach
+
+# Simulación de despliegue: descargar la imagen publicada en GHCR
+docker compose \
+  -p devops-task-deploy \
+  -f compose.yaml \
+  -f compose.deploy.yaml \
+  up --detach
 ```
 
-Eso todavía no es un despliegue cloud. Las siguientes etapas del proyecto
-agregarán un registry de imágenes, infraestructura como código, secretos cloud,
-base administrada, observabilidad y un mecanismo de despliegue remoto.
+El registro de imágenes y la publicación automática ya están implementados con
+GHCR y GitHub Actions. Todavía no existe un despliegue cloud: tanto la API como
+PostgreSQL continúan ejecutándose en la computadora local.
 
+Las siguientes etapas pueden agregar infraestructura como código, gestión de
+secretos cloud, una base administrada, observabilidad y un mecanismo de
+despliegue remoto.

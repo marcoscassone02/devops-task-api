@@ -5,4 +5,10 @@ __pycache__/
 .env
 .idea/
 .vscode/
-
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfplan
+crash.log
+crash.*.log

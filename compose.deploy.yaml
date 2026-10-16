@@ -5,6 +5,9 @@ services:
     build: !reset null
     restart: unless-stopped
 
+  db:
+    restart: unless-stopped
+    
   migrate:
     image: ghcr.io/marcoscassone02/devops-task-api:${IMAGE_TAG:-latest}
     pull_policy: always

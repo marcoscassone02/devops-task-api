@@ -10,7 +10,7 @@ readonly COMPOSE_PLUGIN_DIR="/usr/local/lib/docker/cli-plugins"
 readonly COMPOSE_DOWNLOAD_URL="https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}"
 
 dnf update -y
-dnf install -y docker git curl openssl
+dnf install -y docker git openssl
 
 systemctl enable --now docker
 

@@ -28,3 +28,14 @@ variable "allowed_api_cidr" {
     error_message = "allowed_api_cidr must be a valid IPv4 CIDR ending in /32."
   }
 }
+
+variable "instance_type" {
+  description = "EC2 instance type used to run the API and PostgreSQL"
+  type        = string
+  default     = "t3.small"
+
+  validation {
+    condition     = contains(["t3.micro", "t3.small", "t3.medium"], var.instance_type)
+    error_message = "instance_type must be t3.micro, t3.small, or t3.medium."
+  }
+}

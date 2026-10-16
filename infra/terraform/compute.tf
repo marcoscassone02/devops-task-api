@@ -9,6 +9,8 @@ resource "aws_instance" "api" {
   vpc_security_group_ids      = [aws_security_group.api.id]
   iam_instance_profile        = aws_iam_instance_profile.api.name
   associate_public_ip_address = true
+  user_data                   = file("${path.module}/scripts/bootstrap.sh")
+  user_data_replace_on_change = true
 
   metadata_options {
     http_endpoint               = "enabled"

@@ -29,6 +29,10 @@ resource "aws_instance" "api" {
     cpu_credits = "standard"
   }
 
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = {
     Name = "${var.project_name}-${var.environment}-api"
   }

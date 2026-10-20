@@ -1,135 +1,256 @@
 # DevOps Task API
 
-A small task-management API built as a hands-on Cloud and DevOps portfolio
-project. It provides a realistic application for practicing containers,
-database migrations, automated testing, CI/CD, infrastructure as code,
-observability, and cloud deployment.
+Task-management API built as a hands-on Cloud/DevOps portfolio project. The
+repository demonstrates application development, containerization, automated
+quality checks, image publication, infrastructure as code, secret management,
+and deployment to AWS.
 
-## Current milestone
+## Architecture
 
-The project currently provides:
+```text
+Developer
+  |
+  | Git push / pull request
+  v
+GitHub Actions
+  |-- Ruff + pytest + pip-audit
+  |-- build + Trivy scan
+  `-- publish runtime image to GHCR
 
-- A FastAPI service with a complete task CRUD API.
-- PostgreSQL 16 persistence with a named Docker volume.
-- Database migrations managed by Alembic.
-- Automatic migration execution before the API starts.
-- Pytest tests using an isolated in-memory SQLite database.
-- A multi-stage Dockerfile with `runtime` and `test` targets.
-- Docker Compose services for the API, database, migrations, and tests.
-- Health checks for PostgreSQL and the API.
-- Interactive API documentation at `/docs`.
+AWS
+  |
+  v
+Public subnet + security group (TCP 8000 restricted to one /32)
+  |
+  v
+EC2 Amazon Linux 2023 (managed through Systems Manager)
+  |-- FastAPI container
+  |-- Alembic migration container
+  `-- PostgreSQL 16 container
+          |
+          v
+      encrypted persistent EBS mounted at /data/postgres
+```
 
-## Requirements
+The API and PostgreSQL currently run as containers on one EC2 instance. The
+instance is replaceable; PostgreSQL data is kept on a separate EBS volume.
+
+## Implemented features
+
+- FastAPI CRUD API with interactive documentation.
+- PostgreSQL 16 through SQLAlchemy 2 and Psycopg.
+- Alembic migrations executed before the API starts.
+- Pytest tests with an isolated in-memory SQLite database.
+- Multi-stage Dockerfile with `runtime` and `test` targets.
+- Docker Compose health checks and dependency ordering.
+- Ruff linting, dependency auditing with pip-audit, and image scanning with
+  Trivy.
+- GitHub Actions CI on pull requests and pushes to `main`.
+- Automatic runtime-image publication to GitHub Container Registry (GHCR).
+- AWS infrastructure managed with Terraform and remote state in S3.
+- VPC, public subnet, internet gateway, route table, security group, IAM role,
+  EC2, encrypted EBS, and SSM Parameter Store.
+- EC2 access through AWS Systems Manager Session Manager without inbound SSH.
+- Automated EC2 bootstrap that installs Docker Compose, mounts the PostgreSQL
+  EBS volume, retrieves the database password, pulls the GHCR image, runs
+  migrations, and starts the application.
+- PostgreSQL data verified to survive an EC2 replacement.
+
+## Main technologies
+
+Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2, Psycopg, PostgreSQL 16, Alembic,
+pytest, Ruff, pip-audit, Docker, Docker Compose, Trivy, GitHub Actions, GHCR,
+Terraform, Amazon EC2, Amazon EBS, Amazon S3, IAM, Systems Manager, and Parameter
+Store.
+
+## Run locally
+
+Requirements:
 
 - Docker
 - Docker Compose
 
-No local Python installation is required for the containerized workflow.
-
-## Configuration
-
-Create the local environment file from the provided example:
+Create the local configuration:
 
 ```bash
 cp .env.example .env
 ```
 
-Review the values in `.env` before starting the application. This file is
-ignored by Git and must not be committed.
-
-## Run locally
-
-Build and start the application:
+Replace the example password and start the application:
 
 ```bash
-docker compose up --build
+docker compose up --build --detach
 ```
 
-Compose starts the services in the following order:
+Compose follows this startup order:
 
 ```text
-PostgreSQL healthy -> Alembic upgrade head -> API
+PostgreSQL healthy -> alembic upgrade head -> FastAPI
 ```
 
-The API starts only after PostgreSQL is ready and all pending migrations have
-been applied successfully.
+Endpoints:
 
-Available endpoints:
+- Health check: <http://localhost:8000/health>
+- Swagger UI: <http://localhost:8000/docs>
+- Tasks: <http://localhost:8000/tasks>
 
-- API health: <http://localhost:8000/health>
-- Interactive documentation: <http://localhost:8000/docs>
-
-Stop the containers while preserving the PostgreSQL volume:
+Inspect or stop the environment:
 
 ```bash
+docker compose ps --all
+docker compose logs --follow
 docker compose down
 ```
 
-To also delete the persisted local database, run:
+`docker compose down` preserves the database. To intentionally remove the local
+database volume, use `docker compose down --volumes`.
 
-```bash
-docker compose down --volumes
-```
+## Tests and quality checks
 
-## Run tests
-
-Build the dedicated test target and run the test suite:
+Run the test service:
 
 ```bash
 docker compose run --rm --build test
 ```
 
-The tests use SQLite in memory, so they do not read or modify the PostgreSQL
-development database.
+Or build the test image and run each check separately:
+
+```bash
+docker build --target test --tag devops-task-api:test .
+docker run --rm devops-task-api:test ruff check .
+docker run --rm devops-task-api:test pip-audit --requirement requirements.txt
+docker run --rm \
+  --env DATABASE_URL=sqlite+pysqlite:///:memory: \
+  devops-task-api:test
+```
 
 ## Database migrations
 
-After changing the SQLAlchemy models, generate a migration:
+Generate and review a migration after changing a SQLAlchemy model:
 
 ```bash
-docker compose run --rm migrate alembic revision \
-  --autogenerate \
-  -m "describe the schema change"
+docker compose run --rm migrate \
+  alembic revision --autogenerate -m "describe the schema change"
 ```
 
-Always review an autogenerated migration before applying it. Autogenerate
-detects many schema differences, but it cannot determine the intent of every
-change.
-
-Apply all pending migrations:
+Apply pending migrations:
 
 ```bash
 docker compose run --rm migrate
 ```
 
-Inspect the revision registered in the running PostgreSQL database:
+The `migrate` service runs `alembic upgrade head`. The first project migration
+is `fcbd5f880c30`.
 
-```bash
-docker compose exec db sh -c \
-  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT * FROM alembic_version;"'
+`alembic stamp head` is only for adopting a database whose schema already
+matches the migrations. It records the revision without executing schema
+changes.
+
+## CI/CD and container images
+
+`.github/workflows/ci.yml` runs on pull requests to `main` and pushes to
+`main`. The `quality` job runs Ruff, pip-audit, pytest, builds the runtime image,
+and scans it with Trivy. On a successful push to `main`, the `publish` job
+publishes these tags:
+
+```text
+ghcr.io/marcoscassone02/devops-task-api:latest
+ghcr.io/marcoscassone02/devops-task-api:<commit-sha>
 ```
 
-### Adopting an existing database
-
-If the tables already existed before Alembic was introduced, first verify that
-their schema matches the migration and then register the current revision
-without executing its operations:
+Pull the latest published image:
 
 ```bash
-docker compose run --rm migrate alembic stamp head
+docker pull ghcr.io/marcoscassone02/devops-task-api:latest
 ```
 
-`stamp head` does not create or alter tables. New installations must use
-`alembic upgrade head`, which is already executed by the `migrate` service.
+`compose.yaml` builds from local source. `compose.deploy.yaml` is an override
+used on EC2: it pulls the published image and binds `/data/postgres` to the
+PostgreSQL data directory.
+
+## AWS infrastructure
+
+Terraform code is split into:
+
+- `infra/bootstrap`: creates the protected, encrypted, versioned S3 bucket used
+  for remote Terraform state.
+- `infra/terraform`: creates networking, IAM, EC2, EBS, Parameter Store, and the
+  application bootstrap configuration.
+
+Important infrastructure behavior:
+
+- The EC2 root EBS volume is replaceable and deleted with the instance.
+- The separate 10 GiB PostgreSQL EBS volume is encrypted and protected with
+  `prevent_destroy`.
+- The PostgreSQL password is a `SecureString` in Parameter Store and is read by
+  the EC2 IAM role using least-privilege permissions.
+- The API port is restricted to the configured developer IPv4 `/32` CIDR.
+- No inbound port 22 is required; administration uses Session Manager.
+- Changing `user_data` replaces EC2, after which the existing PostgreSQL EBS is
+  attached and mounted automatically.
+
+Typical Terraform workflow:
+
+```bash
+aws login --profile devops-task-api
+
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform init
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform fmt -check -recursive
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform validate
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform plan -out=plan.tfplan
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform apply plan.tfplan
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform output
+```
+
+Before applying a plan that replaces EC2 or changes storage, review the plan and
+create a consistent EBS snapshot when appropriate.
+
+## Access the deployed instance
+
+Get the instance ID and connect with Session Manager:
+
+```bash
+INSTANCE_ID="$(AWS_PROFILE=devops-task-api \
+  terraform -chdir=infra/terraform output -raw api_instance_id)"
+
+AWS_PROFILE=devops-task-api aws ssm start-session \
+  --target "${INSTANCE_ID}" \
+  --region us-east-1
+```
+
+Useful checks inside EC2:
+
+```bash
+sudo cloud-init status --wait
+findmnt /data/postgres
+sudo docker compose \
+  -p devops-task-api \
+  -f /opt/devops-task-api/compose.yaml \
+  -f /opt/devops-task-api/compose.deploy.yaml \
+  ps
+curl -fsS http://localhost:8000/health
+```
+
+## Security and limitations
+
+- Secrets and Terraform variable files are ignored by Git.
+- EBS volumes, snapshots, EC2, public IPv4 addresses, and other AWS resources
+  can generate charges while they exist.
+- This is a development/portfolio architecture. PostgreSQL is self-managed on
+  the same EC2 host as the API; a production evolution could use an Application
+  Load Balancer, HTTPS, managed DNS, Amazon RDS, centralized logs, alarms,
+  backups, and automated deployments.
 
 ## Roadmap
 
-- [x] Task CRUD endpoints.
-- [x] PostgreSQL persistence.
-- [x] Alembic database migrations.
-- [ ] Continuous integration with tests, linting, and security checks.
-- [ ] Container image publication.
-- [ ] Cloud infrastructure managed with Terraform.
-- [ ] Cloud deployment.
-- [ ] Metrics, dashboards, centralized logs, and alerting.
-- [ ] Kubernetes deployment.
+- [x] CRUD API, tests, PostgreSQL, and Alembic.
+- [x] Multi-stage Docker images and Docker Compose.
+- [x] CI quality and security checks.
+- [x] Image publication to GHCR.
+- [x] Terraform remote state and AWS networking.
+- [x] EC2 deployment through automated bootstrap.
+- [x] Persistent PostgreSQL EBS and Parameter Store secret.
+- [ ] Centralized logs, metrics, dashboards, and alarms.
+- [ ] Automated application deployment after publishing an image.
+- [ ] HTTPS and stable DNS endpoint.
+- [ ] Managed database and high-availability architecture.

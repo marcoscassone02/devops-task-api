@@ -7,6 +7,10 @@ services:
 
   db:
     restart: unless-stopped
+    volumes:
+      - type: bind
+        source: /data/postgres
+        target: /var/lib/postgresql/data
     
   migrate:
     image: ghcr.io/marcoscassone02/devops-task-api:${IMAGE_TAG:-latest}

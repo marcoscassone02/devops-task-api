@@ -1,827 +1,187 @@
-# Guía de estudio y operación de DevOps Task API
+# Guía rápida de DevOps Task API
 
-Este documento resume para qué sirve cada tecnología del proyecto y reúne los
-comandos principales. Los comandos se ejecutan desde la raíz del repositorio.
+Comandos y conceptos esenciales. Ejecutar desde la raíz del repositorio.
 
-## 1. Arquitectura actual
-
-```text
-Cliente
-  |
-  v
-FastAPI + Uvicorn (servicio api)
-  |
-  v
-SQLAlchemy + Psycopg
-  |
-  v
-PostgreSQL 16 (servicio db)
-  |
-  v
-Volumen persistente postgres_data
-
-Antes de iniciar api:
-
-PostgreSQL healthy
-  -> Alembic upgrade head (servicio migrate)
-  -> FastAPI
-```
-
-Docker Compose coordina cuatro servicios:
-
-- `api`: ejecuta FastAPI con Uvicorn.
-- `db`: ejecuta PostgreSQL 16.
-- `migrate`: aplica las migraciones de Alembic y termina.
-- `test`: ejecuta las herramientas de calidad y los tests.
-
-El proyecto también tiene un flujo automatizado de integración y publicación:
+## Arquitectura
 
 ```text
-Pull request hacia main
-  -> Ruff
-  -> pip-audit
-  -> pytest
-  -> construir imagen runtime
-  -> Trivy
-
-Push a main
-  -> repetir controles de calidad
-  -> publicar imagen runtime en GHCR
-     ├── etiqueta latest
-     └── etiqueta con el SHA del commit
+GitHub Actions -> calidad y seguridad -> imagen en GHCR
+                                           |
+                                           v
+EC2 -> Docker Compose -> FastAPI + Alembic + PostgreSQL
+                                           |
+                                           v
+                              EBS persistente /data/postgres
 ```
 
-## 2. Tecnologías y responsabilidades
+- `compose.yaml`: desarrollo local; construye las imágenes.
+- `compose.deploy.yaml`: override de EC2; descarga la imagen de GHCR y monta el
+  EBS en PostgreSQL.
+- La EC2 tiene un EBS raíz reemplazable y otro EBS persistente para PostgreSQL.
+- Parameter Store guarda la contraseña cifrada.
+- Session Manager permite administrar EC2 sin abrir SSH.
+- `user-data.sh.tftpl` pasa valores de Terraform a `bootstrap.sh`.
+- `bootstrap.sh` prepara una EC2 nueva, monta EBS y levanta los contenedores.
 
-### Python
-
-Lenguaje con el que está escrita la aplicación. La imagen utiliza Python 3.12.
-
-### FastAPI
-
-Framework que define los endpoints HTTP, valida las peticiones y genera la
-documentación interactiva disponible en `/docs`.
-
-### Uvicorn
-
-Servidor que mantiene la aplicación FastAPI escuchando peticiones HTTP. El
-contenedor de la API lo ejecuta con:
-
-```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
-```
-
-### Pydantic
-
-Valida los datos que entran y salen de la API. Por ejemplo, comprueba que el
-título de una tarea exista y respete su longitud máxima.
-
-### SQLAlchemy
-
-ORM y toolkit de base de datos. Permite representar tablas como clases Python y
-construir consultas sin escribir todo el SQL manualmente.
-
-### Psycopg
-
-Driver que permite que SQLAlchemy y Python se comuniquen con PostgreSQL.
-
-### PostgreSQL
-
-Base de datos relacional que guarda las tareas. El servicio utiliza la imagen
-oficial `postgres:16-alpine`.
-
-### Alembic y las migraciones
-
-Alembic administra la evolución del esquema de la base de datos.
-
-Una migración es un archivo versionado que describe un cambio de esquema, por
-ejemplo:
-
-- crear la tabla `tasks`;
-- agregar una columna `priority`;
-- crear un índice;
-- modificar una restricción.
-
-Los modelos de SQLAlchemy describen cómo debería verse el esquema actual. Las
-migraciones explican cómo transformar una base existente desde una versión a la
-siguiente.
-
-La tabla `alembic_version` registra qué revisión ya fue aplicada. La primera
-revisión del proyecto es `fcbd5f880c30`.
-
-Se eliminó `Base.metadata.create_all()` del inicio de FastAPI porque no conserva
-un historial de cambios ni permite controlar de forma segura la evolución del
-esquema. Alembic es ahora la única autoridad para modificarlo.
-
-### Docker
-
-Empaqueta la aplicación y sus dependencias en imágenes reproducibles.
-
-- Imagen: plantilla inmutable construida desde el Dockerfile.
-- Contenedor: proceso en ejecución creado desde una imagen.
-- Volumen: almacenamiento persistente separado del contenedor.
-- Red: permite que los contenedores se encuentren por nombre.
-
-### Docker Compose
-
-Declara y coordina varios contenedores, sus redes, variables, volúmenes, health
-checks y orden de inicio. Automatiza los pasos manuales de Docker documentados
-más adelante.
-
-### pytest y HTTPX
-
-`pytest` ejecuta los tests. HTTPX permite que `TestClient` simule peticiones a
-FastAPI. Los tests usan SQLite en memoria y no modifican PostgreSQL.
-
-### Ruff
-
-Linter que analiza el código sin ejecutarlo. Detecta imports desordenados,
-código sin usar, sintaxis obsoleta y otros problemas estáticos.
-
-### pip-audit
-
-Compara las dependencias Python con bases de vulnerabilidades conocidas. No
-analiza nuestro código ni garantiza que una dependencia sea segura frente a
-vulnerabilidades todavía desconocidas.
-
-### Trivy
-
-Escáner de seguridad para imágenes de contenedor. En el pipeline revisa la
-imagen `runtime` en busca de vulnerabilidades conocidas de severidad `HIGH` y
-`CRITICAL`, tanto en paquetes del sistema operativo como en librerías.
-
-Actualmente ignora vulnerabilidades que todavía no tienen una corrección
-disponible. Si encuentra una vulnerabilidad corregible dentro de esas
-severidades, el job falla y la imagen no se publica.
-
-### Git y GitHub
-
-Git conserva el historial local. GitHub aloja el repositorio remoto y permite
-trabajar mediante ramas y pull requests.
-
-### GitHub Actions
-
-Ejecuta el pipeline de CI en una máquina virtual limpia ante pull requests y
-pushes a `main`. El job `quality` construye la imagen de test, ejecuta Ruff,
-pip-audit y pytest, construye la imagen `runtime` y la analiza con Trivy.
-
-El job `publish` se ejecuta solamente después de un push a `main` y únicamente
-si `quality` terminó correctamente. Construye la imagen `runtime` y la publica
-en GitHub Container Registry.
-
-### GitHub Container Registry (GHCR)
-
-Registro de imágenes de contenedor integrado con GitHub. Guarda la imagen
-lista para ejecutar sin necesidad de construirla nuevamente desde el código
-fuente.
-
-La imagen del proyecto se publica como:
-
-```text
-ghcr.io/marcoscassone02/devops-task-api
-```
-
-Se generan dos etiquetas:
-
-- `latest`: versión más reciente publicada desde `main`.
-- SHA del commit: versión exacta e inmutable asociada a un commit de Git.
-
-## 3. Archivos de dependencias
-
-`requirements.txt` contiene lo necesario para ejecutar la API y las migraciones
-en producción:
-
-```text
-FastAPI, Uvicorn, SQLAlchemy, Psycopg y Alembic
-```
-
-`requirements-dev.txt` incluye `requirements.txt` y agrega herramientas de
-desarrollo:
-
-```text
-HTTPX, pytest, Ruff y pip-audit
-```
-
-La imagen `runtime` solo instala dependencias de producción. La imagen `test`
-también instala las de desarrollo.
-
-## 4. Primera ejecución con Docker Compose
-
-Crear el archivo local de configuración:
+## Docker local
 
 ```bash
 cp .env.example .env
-```
-
-Editar `.env` y reemplazar la contraseña de ejemplo. Nunca confirmar `.env` en
-Git.
-
-Construir y levantar la aplicación en segundo plano:
-
-```bash
 docker compose up --build --detach
-```
-
-Compose realiza automáticamente:
-
-```text
-crear red
-  -> crear volumen
-  -> iniciar PostgreSQL
-  -> esperar su health check
-  -> ejecutar alembic upgrade head
-  -> iniciar API
-```
-
-El servicio `test` no se inicia con este comando porque pertenece al perfil
-`test`. Se ejecuta de forma explícita con los comandos de la sección 10.
-
-Comprobar los servicios:
-
-```bash
 docker compose ps --all
-```
-
-Probar la API:
-
-```bash
+docker compose logs --follow
 curl http://localhost:8000/health
-curl http://localhost:8000/tasks
-```
-
-Abrir la documentación:
-
-```text
-http://localhost:8000/docs
-```
-
-## 5. Comandos habituales de Docker Compose
-
-Construir las imágenes:
-
-```bash
-docker compose build
-```
-
-Levantar o reconstruir los servicios:
-
-```bash
-docker compose up --build --detach
-```
-
-Ver su estado:
-
-```bash
-docker compose ps --all
-```
-
-Seguir logs:
-
-```bash
-docker compose logs --follow api
-docker compose logs --follow migrate
-docker compose logs --follow db
-```
-
-Reiniciar únicamente la API:
-
-```bash
-docker compose restart api
-```
-
-Detener y eliminar contenedores y red, conservando la base:
-
-```bash
 docker compose down
 ```
 
-Eliminar también el volumen y todos los datos locales de PostgreSQL:
+Eliminar también la base local, únicamente si se quiere perder esos datos:
 
 ```bash
 docker compose down --volumes
 ```
 
-> **Peligro:** `--volumes` elimina la base persistente. Usarlo solamente cuando
-> se quiera empezar desde cero o se tenga un backup válido.
-
-## 6. Imágenes, contenedores y targets del Dockerfile
-
-El Dockerfile tiene una etapa compartida y dos targets:
-
-```text
-base
-├── runtime: API y migraciones
-└── test: Ruff, pip-audit y pytest
-```
-
-Construir la imagen de producción:
+## Tests y seguridad
 
 ```bash
-docker build --target runtime --tag devops-task-api:local .
-```
+docker compose run --rm --build test
 
-Construir la imagen de tests:
-
-```bash
 docker build --target test --tag devops-task-api:test .
+docker run --rm devops-task-api:test ruff check .
+docker run --rm devops-task-api:test pip-audit --requirement requirements.txt
 ```
 
-Listar imágenes:
+- Ruff revisa estilo y errores estáticos.
+- pytest ejecuta los tests con SQLite en memoria.
+- pip-audit revisa vulnerabilidades de dependencias Python.
+- Trivy revisa la imagen runtime dentro de GitHub Actions.
 
-```bash
-docker image ls
-```
+## Alembic
 
-Listar contenedores activos y detenidos:
-
-```bash
-docker container ls --all
-```
-
-El target `runtime` ejecuta Uvicorn por defecto. El target `test` ejecuta pytest
-por defecto. Un comando pasado a `docker run` reemplaza temporalmente ese
-`CMD`.
-
-## 7. Crear manualmente red, volumen, base y API
-
-Compose es la vía recomendada. Estos pasos manuales sirven para entender qué
-automatiza.
-
-Crear una red:
-
-```bash
-docker network create devops-task-network
-```
-
-Crear un volumen persistente:
-
-```bash
-docker volume create devops-task-postgres-data
-```
-
-Crear PostgreSQL conectado a la red y al volumen:
-
-```bash
-docker run --detach \
-  --name devops-task-db \
-  --network devops-task-network \
-  --env POSTGRES_DB=task_db \
-  --env POSTGRES_USER=task_user \
-  --env POSTGRES_PASSWORD=change-me \
-  --volume devops-task-postgres-data:/var/lib/postgresql/data \
-  postgres:16-alpine
-```
-
-Esperar hasta que PostgreSQL acepte conexiones:
-
-```bash
-docker exec devops-task-db \
-  pg_isready --username task_user --dbname task_db
-```
-
-Construir la imagen runtime:
-
-```bash
-docker build --target runtime --tag devops-task-api:local .
-```
-
-Aplicar las migraciones antes de iniciar la API:
-
-```bash
-docker run --rm \
-  --network devops-task-network \
-  --env DATABASE_URL=postgresql+psycopg://task_user:change-me@devops-task-db:5432/task_db \
-  devops-task-api:local \
-  alembic upgrade head
-```
-
-Crear el contenedor de la API:
-
-```bash
-docker run --detach \
-  --name devops-task-api \
-  --network devops-task-network \
-  --publish 8000:8000 \
-  --env DATABASE_URL=postgresql+psycopg://task_user:change-me@devops-task-db:5432/task_db \
-  devops-task-api:local
-```
-
-Probarlo:
-
-```bash
-curl http://localhost:8000/health
-```
-
-Detener y eliminar esos contenedores manuales sin borrar el volumen:
-
-```bash
-docker rm --force devops-task-api
-docker rm --force devops-task-db
-docker network rm devops-task-network
-```
-
-Eliminar manualmente el volumen y los datos, solamente si se desea empezar de
-cero:
-
-```bash
-docker volume rm devops-task-postgres-data
-```
-
-> **Peligro:** el último comando elimina permanentemente la base guardada en ese
-> volumen.
-
-## 8. PostgreSQL y el volumen
-
-Compose monta el volumen lógico `postgres_data` en:
-
-```text
-/var/lib/postgresql/data
-```
-
-Los contenedores pueden eliminarse y recrearse sin perder las tareas porque los
-archivos de PostgreSQL viven en el volumen.
-
-Listar volúmenes:
-
-```bash
-docker volume ls
-```
-
-Inspeccionar el volumen del proyecto:
-
-```bash
-docker volume inspect devops-task-api_postgres_data
-```
-
-El nombre real puede cambiar si se usa otro nombre de proyecto con `docker
-compose -p`. Confirmarlo siempre con `docker volume ls`.
-
-Abrir una consola de PostgreSQL:
-
-```bash
-docker compose exec db sh -c \
-  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-```
-
-Dentro de `psql`:
-
-```sql
-\dt
-SELECT * FROM tasks;
-SELECT * FROM alembic_version;
-\q
-```
-
-Las variables `POSTGRES_DB`, `POSTGRES_USER` y `POSTGRES_PASSWORD` solo
-inicializan una base vacía. Cambiarlas en `.env` no reconfigura automáticamente
-un volumen que ya contiene PostgreSQL.
-
-## 9. Flujo de migraciones con Alembic
-
-Primero modificar el modelo SQLAlchemy. Después generar una migración:
+Crear una migración después de modificar los modelos:
 
 ```bash
 docker compose run --rm migrate \
-  alembic revision --autogenerate -m "describe schema change"
+  alembic revision --autogenerate -m "descripcion"
 ```
 
-Revisar manualmente el nuevo archivo de `migrations/versions/`. Autogenerate es
-una ayuda, no una garantía de que la migración represente correctamente la
-intención.
-
-Aplicar todas las migraciones pendientes:
+Revisarla y aplicarla:
 
 ```bash
 docker compose run --rm migrate
-```
-
-El comando anterior usa el comando predeterminado del servicio:
-
-```bash
-alembic upgrade head
-```
-
-Consultar revisión e historial:
-
-```bash
 docker compose run --rm migrate alembic current
-docker compose run --rm migrate alembic history
-docker compose run --rm migrate alembic heads
 ```
 
-Retroceder una migración en desarrollo:
-
-```bash
-docker compose run --rm migrate alembic downgrade -1
-```
-
-> Un downgrade puede eliminar columnas o datos. Revisar la función `downgrade`
-> y tener backup antes de usarlo sobre una base importante.
-
-### Adoptar una base creada antes de Alembic
-
-Si la tabla ya existe y se verificó que coincide exactamente con la migración:
+`stamp head` solo registra una base preexistente cuyo esquema ya coincide:
 
 ```bash
 docker compose run --rm migrate alembic stamp head
 ```
 
-`stamp head` solo escribe la revisión en `alembic_version`: no crea ni modifica
-tablas. No se usa en instalaciones nuevas; allí corresponde `upgrade head`.
-
-## 10. Tests, linting y seguridad
-
-Ejecutar pytest mediante Compose:
-
-```bash
-docker compose run --rm --build test
-```
-
-Construir una vez la imagen de calidad:
-
-```bash
-docker build --target test --tag devops-task-api:test .
-```
-
-Ejecutar Ruff:
-
-```bash
-docker run --rm devops-task-api:test ruff check .
-```
-
-Aplicar fixes seguros de Ruff sobre el repositorio y conservar el propietario de
-los archivos:
-
-```bash
-docker run --rm \
-  --user "$(id -u):$(id -g)" \
-  --volume "$PWD:/workspace" \
-  --workdir /workspace \
-  devops-task-api:test \
-  ruff check --fix --no-cache .
-```
-
-Revisar siempre `git diff` después de un autofix.
-
-Auditar dependencias de producción:
-
-```bash
-docker run --rm \
-  devops-task-api:test \
-  pip-audit --requirement requirements.txt
-```
-
-Ejecutar pytest directamente desde la imagen:
-
-```bash
-docker run --rm \
-  --env DATABASE_URL=sqlite+pysqlite:///:memory: \
-  devops-task-api:test
-```
-
-## 11. Git, ramas y pull requests
-
-Actualizar `main` y crear una rama para una tarea:
+## Git y GitHub
 
 ```bash
 git switch main
 git pull --ff-only
-git switch -c tipo/descripcion-corta
-```
+git switch -c tipo/descripcion
 
-Ejemplos de prefijos:
-
-- `feat/`: nueva funcionalidad.
-- `fix/`: corrección.
-- `ci/`: pipeline y automatización.
-- `docs/`: documentación.
-- `chore/`: mantenimiento.
-
-Revisar y confirmar cambios:
-
-```bash
 git status
 git diff
-git add archivo1 archivo2
-git commit -m "tipo: descripcion"
-git push -u origin tipo/descripcion-corta
+git add ARCHIVOS
+git commit -m "descripcion"
+git push -u origin tipo/descripcion
+gh pr create --base main --head tipo/descripcion
 ```
 
-Crear un pull request:
-
-```bash
-gh pr create --base main --head tipo/descripcion-corta
-```
-
-Después de fusionarlo:
+Después de fusionar:
 
 ```bash
 git switch main
 git pull --ff-only
-git push origin --delete tipo/descripcion-corta
-git branch -d tipo/descripcion-corta
+git push origin --delete tipo/descripcion
+git branch -d tipo/descripcion
 ```
 
-## 12. GitHub Actions
-
-El workflow está en `.github/workflows/ci.yml` y se ejecuta cuando:
-
-- hay un push a `main`;
-- se abre o actualiza un pull request dirigido a `main`.
-
-Un push a una rama sin pull request no activa el workflow actual.
-
-El workflow contiene dos jobs:
-
-```text
-quality
-  -> Ruff
-  -> pip-audit
-  -> pytest
-  -> build de runtime
-  -> Trivy
-
-publish
-  -> solo en push a main
-  -> espera que quality finalice correctamente
-  -> inicia sesión en GHCR con GITHUB_TOKEN
-  -> publica latest y el SHA del commit
-```
-
-En un pull request se ejecuta `quality`, pero no se publica ninguna imagen.
-Después de fusionar el pull request, el push resultante a `main` ejecuta
-`quality` y, si todo pasa, ejecuta `publish`.
-
-Consultar ejecuciones recientes:
-
-```bash
-gh run list
-```
-
-Ver una ejecución y sus logs:
-
-```bash
-gh run view RUN_ID
-gh run view RUN_ID --log-failed
-```
-
-Ver el paquete publicado desde el navegador:
-
-```text
-https://github.com/marcoscassone02/devops-task-api/pkgs/container/devops-task-api
-```
-
-Descargar la última imagen publicada:
+Los pull requests ejecutan calidad y seguridad. Un push a `main` también
+publica `latest` y el SHA del commit en GHCR.
 
 ```bash
 docker pull ghcr.io/marcoscassone02/devops-task-api:latest
 ```
 
-Comprobar que quedó guardada localmente:
+## Terraform y AWS
+
+Renovar la sesión cuando expiren las credenciales:
 
 ```bash
-docker image ls ghcr.io/marcoscassone02/devops-task-api
+aws login --profile devops-task-api
 ```
 
-## 13. Ejecutar la imagen publicada
-
-`compose.deploy.yaml` es un archivo de override. No reemplaza a `compose.yaml`:
-Docker Compose combina ambos archivos.
-
-El archivo base sigue aportando PostgreSQL, el volumen, las variables, los
-health checks, las dependencias y los comandos. El override cambia solamente
-`api` y `migrate` para que usen la imagen publicada en GHCR.
-
-Sus instrucciones principales significan:
-
-- `image`: selecciona la imagen publicada.
-- `${IMAGE_TAG:-latest}`: usa `latest` si no se proporciona otra etiqueta.
-- `pull_policy: always`: comprueba la imagen remota cada vez que se levanta.
-- `build: !reset null`: elimina el `build` heredado y evita construir localmente.
-- `restart: unless-stopped`: reinicia la API salvo que se detenga manualmente.
-
-Levantar un entorno separado usando la imagen publicada:
+Flujo habitual:
 
 ```bash
-docker compose \
-  -p devops-task-deploy \
-  -f compose.yaml \
-  -f compose.deploy.yaml \
-  up --detach
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform init
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform fmt -check -recursive
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform validate
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform plan -out=plan.tfplan
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform apply plan.tfplan
+AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform output
 ```
 
-El orden es:
+- `resource`: recurso que Terraform administra.
+- `data`: consulta información existente.
+- `variable`: dato configurable.
+- `output`: dato útil resultante.
+- `templatefile`: renderiza un archivo insertando valores de Terraform.
+- `plan`: vista previa; no cambia AWS.
+- `apply`: ejecuta el plan.
+- El estado remoto vive cifrado y versionado en S3.
 
-```text
-descargar imagen de GHCR
-  -> iniciar PostgreSQL
-  -> esperar health check
-  -> ejecutar alembic upgrade head con migrate
-  -> iniciar API usando la misma imagen
-```
+Antes de reemplazar EC2 o tocar almacenamiento, revisar que el plan no destruya
+el EBS de PostgreSQL ni el parámetro secreto. Crear un snapshot cuando exista
+riesgo para los datos.
 
-Ver el estado y los logs de este entorno:
+## EC2 y despliegue
+
+Conectarse sin SSH:
 
 ```bash
-docker compose -p devops-task-deploy -f compose.yaml -f compose.deploy.yaml ps --all
-docker compose -p devops-task-deploy -f compose.yaml -f compose.deploy.yaml logs migrate
-docker compose -p devops-task-deploy -f compose.yaml -f compose.deploy.yaml logs api
+INSTANCE_ID="$(AWS_PROFILE=devops-task-api \
+  terraform -chdir=infra/terraform output -raw api_instance_id)"
+
+AWS_PROFILE=devops-task-api aws ssm start-session \
+  --target "${INSTANCE_ID}" \
+  --region us-east-1
 ```
 
-Detenerlo conservando el volumen de PostgreSQL:
+Comprobar la máquina:
 
 ```bash
-docker compose \
-  -p devops-task-deploy \
-  -f compose.yaml \
-  -f compose.deploy.yaml \
-  down
+sudo cloud-init status --wait
+findmnt /data/postgres
+sudo docker compose \
+  -p devops-task-api \
+  -f /opt/devops-task-api/compose.yaml \
+  -f /opt/devops-task-api/compose.deploy.yaml \
+  ps
+curl -fsS http://localhost:8000/health
+curl -fsS http://localhost:8000/tasks
 ```
 
-### Desplegar una versión exacta
-
-Para un entorno real es preferible usar la etiqueta con el SHA del commit en
-vez de `latest`. Así se sabe exactamente qué versión está ejecutándose y se
-puede volver a una versión anterior.
+Logs:
 
 ```bash
-IMAGE_TAG=SHA_DEL_COMMIT docker compose \
-  -p devops-task-deploy \
-  -f compose.yaml \
-  -f compose.deploy.yaml \
-  up --detach
+sudo docker compose \
+  -p devops-task-api \
+  -f /opt/devops-task-api/compose.yaml \
+  -f /opt/devops-task-api/compose.deploy.yaml \
+  logs --tail=100 api db migrate
 ```
 
-Este paso simula un despliegue, pero todavía ocurre en la computadora local. La
-imagen viene del registro remoto; PostgreSQL, la red y los contenedores siguen
-ejecutándose localmente.
+## Recordatorios
 
-## 14. Diagnóstico rápido
-
-Ver todos los servicios y códigos de salida:
-
-```bash
-docker compose ps --all
-```
-
-Si la API no inicia:
-
-```bash
-docker compose logs migrate
-docker compose logs api
-```
-
-Si aparece `table tasks already exists`, comprobar si se está intentando aplicar
-la primera migración sobre una base preexistente que todavía no fue registrada.
-No ejecutar `stamp` sin verificar primero que el esquema coincida.
-
-Si se modificaron requirements o el Dockerfile, reconstruir:
-
-```bash
-docker compose build --no-cache
-```
-
-Si falla la descarga de GHCR, comprobar que el paquete exista y que su
-visibilidad permita descargarlo. Si es privado, iniciar sesión:
-
-```bash
-docker login ghcr.io
-```
-
-Si el puerto 8000 ya está ocupado, verificar que el entorno normal y el de
-despliegue no estén levantados al mismo tiempo:
-
-```bash
-docker compose ps --all
-docker compose -p devops-task-deploy -f compose.yaml -f compose.deploy.yaml ps --all
-```
-
-Si el puerto 8000 está ocupado:
-
-```bash
-docker container ls
-```
-
-## 15. Estado actual y futuro despliegue cloud
-
-Actualmente existen dos formas de ejecutarlo localmente:
-
-```bash
-# Desarrollo: construir desde el código local
-docker compose up --build --detach
-
-# Simulación de despliegue: descargar la imagen publicada en GHCR
-docker compose \
-  -p devops-task-deploy \
-  -f compose.yaml \
-  -f compose.deploy.yaml \
-  up --detach
-```
-
-El registro de imágenes y la publicación automática ya están implementados con
-GHCR y GitHub Actions. Todavía no existe un despliegue cloud: tanto la API como
-PostgreSQL continúan ejecutándose en la computadora local.
-
-Las siguientes etapas pueden agregar infraestructura como código, gestión de
-secretos cloud, una base administrada, observabilidad y un mecanismo de
-despliegue remoto.
+- No confirmar `.env`, `*.tfvars`, estados ni planes de Terraform.
+- No ejecutar `mkfs` sobre un volumen con datos.
+- Eliminar una EC2 no elimina el EBS persistente del proyecto.
+- El EBS raíz sí se elimina con la instancia.
+- Los snapshots, volúmenes, EC2 y direcciones IPv4 públicas generan costos.
+- `migrate` en estado `Exited (0)` es normal: termina después de migrar.

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+
+export POSTGRES_EBS_VOLUME_ID="${postgres_ebs_volume_id}"
+export POSTGRES_PASSWORD_PARAMETER_NAME="${postgres_password_parameter_name}"
+export AWS_REGION="${aws_region}"
+export AWS_DEFAULT_REGION="${aws_region}"
+
+${bootstrap_script}

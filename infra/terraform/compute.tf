@@ -9,7 +9,12 @@ resource "aws_instance" "api" {
   vpc_security_group_ids      = [aws_security_group.api.id]
   iam_instance_profile        = aws_iam_instance_profile.api.name
   associate_public_ip_address = true
-  user_data                   = file("${path.module}/scripts/bootstrap.sh")
+  user_data = templatefile("${path.module}/scripts/user-data.sh.tftpl", {
+    aws_region                       = var.aws_region
+    postgres_ebs_volume_id           = aws_ebs_volume.postgres_data.id
+    postgres_password_parameter_name = aws_ssm_parameter.postgres_password.name
+    bootstrap_script                 = file("${path.module}/scripts/bootstrap.sh")
+  })
   user_data_replace_on_change = true
 
   metadata_options {
@@ -32,6 +37,10 @@ resource "aws_instance" "api" {
   lifecycle {
     ignore_changes = [ami]
   }
+
+  depends_on = [
+    aws_iam_role_policy.postgres_password_read
+  ]
 
   tags = {
     Name = "${var.project_name}-${var.environment}-api"

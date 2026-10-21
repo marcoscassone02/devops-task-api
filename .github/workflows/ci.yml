@@ -96,3 +96,84 @@ jobs:
         run: |
           docker push ghcr.io/${{ github.repository }}:${{ github.sha }}
           docker push ghcr.io/${{ github.repository }}:latest
+
+  deploy:
+    name: Deploy to EC2
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Configure temporary AWS credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          role-session-name: GitHubActionsDeploy
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Start deployment through Systems Manager
+        id: deployment
+        env:
+          DOCUMENT_NAME: ${{ vars.AWS_SSM_DOCUMENT_NAME }}
+          INSTANCE_NAME: ${{ vars.AWS_DEPLOY_INSTANCE_NAME }}
+        run: |
+          command_id="$(
+            aws ssm send-command \
+              --targets "Key=tag:Name,Values=${INSTANCE_NAME}" \
+              --document-name "${DOCUMENT_NAME}" \
+              --parameters "imageTag=${GITHUB_SHA}" \
+              --comment "Deploy ${GITHUB_SHA}" \
+              --query "Command.CommandId" \
+              --output text
+          )"
+
+          echo "command_id=${command_id}" >> "${GITHUB_OUTPUT}"
+          echo "Started SSM command ${command_id}"
+
+      - name: Wait for deployment result
+        env:
+          COMMAND_ID: ${{ steps.deployment.outputs.command_id }}
+        run: |
+          for attempt in {1..60}; do
+            status="$(
+              aws ssm list-command-invocations \
+                --command-id "${COMMAND_ID}" \
+                --query "CommandInvocations[0].Status" \
+                --output text
+            )"
+
+            case "${status}" in
+              Success)
+                aws ssm list-command-invocations \
+                  --command-id "${COMMAND_ID}" \
+                  --details \
+                  --query "CommandInvocations[0].CommandPlugins[0].Output" \
+                  --output text
+
+                exit 0
+                ;;
+
+              Pending|InProgress|Delayed|None|"")
+                sleep 5
+                ;;
+
+              *)
+                echo "Deployment finished with status: ${status}" >&2
+
+                aws ssm list-command-invocations \
+                  --command-id "${COMMAND_ID}" \
+                  --details \
+                  --output json
+
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "Deployment did not finish within five minutes" >&2
+          exit 1

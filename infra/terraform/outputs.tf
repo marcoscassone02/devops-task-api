@@ -27,3 +27,13 @@ output "api_public_dns" {
   description = "Public DNS name of the API instance"
   value       = aws_instance.api.public_dns
 }
+
+output "github_actions_deploy_role_arn" {
+  description = "IAM role assumed by GitHub Actions for deployments"
+  value       = aws_iam_role.github_actions_deploy.arn
+}
+
+output "deployment_ssm_document_name" {
+  description = "SSM document used to deploy the application"
+  value       = aws_ssm_document.deploy_application.name
+}

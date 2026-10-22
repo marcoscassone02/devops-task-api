@@ -37,3 +37,22 @@ output "deployment_ssm_document_name" {
   description = "SSM document used to deploy the application"
   value       = aws_ssm_document.deploy_application.name
 }
+
+output "cloudwatch_log_group_name" {
+  description = "CloudWatch log group containing container logs"
+  value       = aws_cloudwatch_log_group.containers.name
+}
+
+output "cloudwatch_dashboard_name" {
+  description = "CloudWatch dashboard for the application"
+  value       = aws_cloudwatch_dashboard.application.dashboard_name
+}
+
+output "cloudwatch_alarm_names" {
+  description = "CloudWatch alarms monitoring the application and EC2"
+  value = [
+    aws_cloudwatch_metric_alarm.application_errors.alarm_name,
+    aws_cloudwatch_metric_alarm.ec2_high_cpu.alarm_name,
+    aws_cloudwatch_metric_alarm.ec2_status_check.alarm_name,
+  ]
+}

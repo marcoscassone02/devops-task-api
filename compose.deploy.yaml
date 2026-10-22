@@ -4,6 +4,14 @@ services:
     pull_policy: always
     build: !reset null
     restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${AWS_REGION:-us-east-1}"
+        awslogs-group: "${CLOUDWATCH_LOG_GROUP:-/devops-task-api/dev/containers}"
+        awslogs-stream-prefix: api
+        mode: non-blocking
+        max-buffer-size: 4m
 
   db:
     restart: unless-stopped
@@ -11,8 +19,24 @@ services:
       - type: bind
         source: /data/postgres
         target: /var/lib/postgresql/data
-    
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${AWS_REGION:-us-east-1}"
+        awslogs-group: "${CLOUDWATCH_LOG_GROUP:-/devops-task-api/dev/containers}"
+        awslogs-stream-prefix: db
+        mode: non-blocking
+        max-buffer-size: 4m
+
   migrate:
     image: ghcr.io/marcoscassone02/devops-task-api:${IMAGE_TAG:-latest}
     pull_policy: always
     build: !reset null
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "${AWS_REGION:-us-east-1}"
+        awslogs-group: "${CLOUDWATCH_LOG_GROUP:-/devops-task-api/dev/containers}"
+        awslogs-stream-prefix: migrate
+        mode: non-blocking
+        max-buffer-size: 4m

@@ -15,7 +15,8 @@ Developer
 GitHub Actions
   |-- Ruff + pytest + pip-audit
   |-- build + Trivy scan
-  `-- publish runtime image to GHCR
+  |-- publish runtime image to GHCR
+  `-- deploy exact image through OIDC + Systems Manager
 
 AWS
   |
@@ -26,10 +27,18 @@ Public subnet + security group (TCP 8000 restricted to one /32)
 EC2 Amazon Linux 2023 (managed through Systems Manager)
   |-- FastAPI container
   |-- Alembic migration container
-  `-- PostgreSQL 16 container
+  |-- PostgreSQL 16 container
+  |       |
+  |       v
+  |   encrypted persistent EBS mounted at /data/postgres
+  |
+  `-- Docker awslogs driver
           |
           v
-      encrypted persistent EBS mounted at /data/postgres
+      CloudWatch Logs
+          |-- application error metric
+          |-- EC2 and application alarms
+          `-- operational dashboard
 ```
 
 The API and PostgreSQL currently run as containers on one EC2 instance. The
@@ -54,14 +63,19 @@ instance is replaceable; PostgreSQL data is kept on a separate EBS volume.
 - Automated EC2 bootstrap that installs Docker Compose, mounts the PostgreSQL
   EBS volume, retrieves the database password, pulls the GHCR image, runs
   migrations, and starts the application.
+- Automated application deployment through GitHub Actions, OIDC, Systems
+  Manager, immutable image tags, and a final health check.
+- Centralized container logs in CloudWatch Logs with seven-day retention.
+- CloudWatch metric filter, application and EC2 alarms, and an operational
+  dashboard managed with Terraform.
 - PostgreSQL data verified to survive an EC2 replacement.
 
 ## Main technologies
 
 Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2, Psycopg, PostgreSQL 16, Alembic,
 pytest, Ruff, pip-audit, Docker, Docker Compose, Trivy, GitHub Actions, GHCR,
-Terraform, Amazon EC2, Amazon EBS, Amazon S3, IAM, Systems Manager, and Parameter
-Store.
+Terraform, Amazon EC2, Amazon EBS, Amazon S3, IAM, Systems Manager, Parameter
+Store, and Amazon CloudWatch.
 
 ## Run locally
 
@@ -164,9 +178,14 @@ Pull the latest published image:
 docker pull ghcr.io/marcoscassone02/devops-task-api:latest
 ```
 
+After publishing an image, the `deploy` job obtains temporary AWS credentials
+through GitHub OIDC, sends the exact commit SHA to EC2 through Systems Manager,
+updates the containers, and verifies the `/health` endpoint. No permanent AWS
+access keys are stored in GitHub.
+
 `compose.yaml` builds from local source. `compose.deploy.yaml` is an override
-used on EC2: it pulls the published image and binds `/data/postgres` to the
-PostgreSQL data directory.
+used on EC2: it pulls the published image, binds `/data/postgres` to the
+PostgreSQL data directory, and sends container logs to CloudWatch.
 
 ## AWS infrastructure
 
@@ -175,7 +194,7 @@ Terraform code is split into:
 - `infra/bootstrap`: creates the protected, encrypted, versioned S3 bucket used
   for remote Terraform state.
 - `infra/terraform`: creates networking, IAM, EC2, EBS, Parameter Store, and the
-  application bootstrap configuration.
+  application bootstrap and observability configuration.
 
 Important infrastructure behavior:
 
@@ -231,6 +250,30 @@ sudo docker compose \
 curl -fsS http://localhost:8000/health
 ```
 
+## Observability
+
+The production Compose override sends the standard output and error streams of
+the API, migration, and PostgreSQL containers to this CloudWatch log group:
+
+```text
+/devops-task-api/dev/containers
+```
+
+Terraform configures seven-day retention, an error metric filter, alarms for
+application errors, high EC2 CPU, and failed EC2 status checks, plus the
+`devops-task-api-dev` dashboard.
+
+Read recent logs:
+
+```bash
+AWS_PROFILE=devops-task-api aws logs tail \
+  /devops-task-api/dev/containers \
+  --region us-east-1 \
+  --since 10m
+```
+
+Add `--follow` to keep streaming new events.
+
 ## Security and limitations
 
 - Secrets and Terraform variable files are ignored by Git.
@@ -238,8 +281,8 @@ curl -fsS http://localhost:8000/health
   can generate charges while they exist.
 - This is a development/portfolio architecture. PostgreSQL is self-managed on
   the same EC2 host as the API; a production evolution could use an Application
-  Load Balancer, HTTPS, managed DNS, Amazon RDS, centralized logs, alarms,
-  backups, and automated deployments.
+  Load Balancer, HTTPS, managed DNS, Amazon RDS, automated backups, and a
+  high-availability architecture.
 
 ## Roadmap
 
@@ -250,7 +293,7 @@ curl -fsS http://localhost:8000/health
 - [x] Terraform remote state and AWS networking.
 - [x] EC2 deployment through automated bootstrap.
 - [x] Persistent PostgreSQL EBS and Parameter Store secret.
-- [ ] Centralized logs, metrics, dashboards, and alarms.
-- [ ] Automated application deployment after publishing an image.
+- [x] Automated application deployment after publishing an image.
+- [x] Centralized logs, metrics, dashboard, and alarms.
 - [ ] HTTPS and stable DNS endpoint.
 - [ ] Managed database and high-availability architecture.

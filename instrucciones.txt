@@ -5,23 +5,27 @@ Comandos y conceptos esenciales. Ejecutar desde la raíz del repositorio.
 ## Arquitectura
 
 ```text
-GitHub Actions -> calidad y seguridad -> imagen en GHCR
-                                           |
-                                           v
+GitHub Actions -> calidad -> imagen en GHCR -> despliegue OIDC + SSM
+                                                      |
+                                                      v
 EC2 -> Docker Compose -> FastAPI + Alembic + PostgreSQL
-                                           |
-                                           v
-                              EBS persistente /data/postgres
+          |                                  |
+          v                                  v
+   CloudWatch Logs                 EBS /data/postgres
 ```
 
 - `compose.yaml`: desarrollo local; construye las imágenes.
 - `compose.deploy.yaml`: override de EC2; descarga la imagen de GHCR y monta el
-  EBS en PostgreSQL.
+  EBS en PostgreSQL. También envía los logs a CloudWatch mediante `awslogs`.
 - La EC2 tiene un EBS raíz reemplazable y otro EBS persistente para PostgreSQL.
 - Parameter Store guarda la contraseña cifrada.
 - Session Manager permite administrar EC2 sin abrir SSH.
 - `user-data.sh.tftpl` pasa valores de Terraform a `bootstrap.sh`.
 - `bootstrap.sh` prepara una EC2 nueva, monta EBS y levanta los contenedores.
+- Un merge en `main` publica la imagen y despliega automáticamente el SHA
+  exacto mediante OIDC y Systems Manager.
+- CloudWatch conserva los logs durante 7 días y muestra métricas y alarmas en
+  el dashboard `devops-task-api-dev`.
 
 ## Docker local
 
@@ -101,8 +105,8 @@ git push origin --delete tipo/descripcion
 git branch -d tipo/descripcion
 ```
 
-Los pull requests ejecutan calidad y seguridad. Un push a `main` también
-publica `latest` y el SHA del commit en GHCR.
+Los pull requests ejecutan calidad y seguridad. Un push a `main` publica
+`latest` y el SHA del commit en GHCR, y luego despliega ese SHA en EC2.
 
 ```bash
 docker pull ghcr.io/marcoscassone02/devops-task-api:latest
@@ -175,6 +179,15 @@ sudo docker compose \
   -f /opt/devops-task-api/compose.yaml \
   -f /opt/devops-task-api/compose.deploy.yaml \
   logs --tail=100 api db migrate
+```
+
+Logs centralizados en CloudWatch:
+
+```bash
+AWS_PROFILE=devops-task-api aws logs tail \
+  /devops-task-api/dev/containers \
+  --region us-east-1 \
+  --since 10m
 ```
 
 ## Recordatorios

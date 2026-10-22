@@ -21,7 +21,11 @@ GitHub Actions
 AWS
   |
   v
-Public subnet + security group (TCP 8000 restricted to one /32)
+CloudFront HTTPS endpoint (TLS termination, no API caching)
+  |
+  | HTTP TCP 8000, restricted to CloudFront origin-facing servers
+  v
+Public subnet + security group
   |
   v
 EC2 Amazon Linux 2023 (managed through Systems Manager)
@@ -68,6 +72,10 @@ instance is replaceable; PostgreSQL data is kept on a separate EBS volume.
 - Centralized container logs in CloudWatch Logs with seven-day retention.
 - CloudWatch metric filter, application and EC2 alarms, and an operational
   dashboard managed with Terraform.
+- Public HTTPS endpoint through Amazon CloudFront with caching disabled for the
+  dynamic API and managed security-response headers.
+- EC2 port 8000 restricted to the AWS-managed CloudFront origin-facing prefix
+  list; direct public access to the instance is blocked.
 - PostgreSQL data verified to survive an EC2 replacement.
 
 ## Main technologies
@@ -75,7 +83,7 @@ instance is replaceable; PostgreSQL data is kept on a separate EBS volume.
 Python 3.12, FastAPI, Uvicorn, SQLAlchemy 2, Psycopg, PostgreSQL 16, Alembic,
 pytest, Ruff, pip-audit, Docker, Docker Compose, Trivy, GitHub Actions, GHCR,
 Terraform, Amazon EC2, Amazon EBS, Amazon S3, IAM, Systems Manager, Parameter
-Store, and Amazon CloudWatch.
+Store, Amazon CloudWatch, and Amazon CloudFront.
 
 ## Run locally
 
@@ -194,7 +202,7 @@ Terraform code is split into:
 - `infra/bootstrap`: creates the protected, encrypted, versioned S3 bucket used
   for remote Terraform state.
 - `infra/terraform`: creates networking, IAM, EC2, EBS, Parameter Store, and the
-  application bootstrap and observability configuration.
+  application bootstrap, observability, and CloudFront configuration.
 
 Important infrastructure behavior:
 
@@ -203,7 +211,10 @@ Important infrastructure behavior:
   `prevent_destroy`.
 - The PostgreSQL password is a `SecureString` in Parameter Store and is read by
   the EC2 IAM role using least-privilege permissions.
-- The API port is restricted to the configured developer IPv4 `/32` CIDR.
+- CloudFront receives public HTTPS traffic and forwards requests to the EC2
+  origin over HTTP port 8000.
+- The EC2 security group allows port 8000 only from the AWS-managed CloudFront
+  origin-facing prefix list. Direct public access to EC2 is blocked.
 - No inbound port 22 is required; administration uses Session Manager.
 - Changing `user_data` replaces EC2, after which the existing PostgreSQL EBS is
   attached and mounted automatically.
@@ -220,6 +231,22 @@ AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform plan -out=plan.tfpl
 AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform apply plan.tfplan
 AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform output
 ```
+
+The public API endpoint is available from the `api_https_url` output:
+
+```bash
+AWS_PROFILE=devops-task-api \
+terraform -chdir=infra/terraform output -raw api_https_url
+```
+
+The current deployment is available at:
+
+- Swagger UI: <https://d3b3z7x9hvekhc.cloudfront.net/docs>
+- Health check: <https://d3b3z7x9hvekhc.cloudfront.net/health>
+
+The generated `cloudfront.net` hostname remains stable for the lifetime of the
+distribution. CloudFront terminates HTTPS and proxies requests to EC2; it does
+not redirect clients to the instance address.
 
 Before applying a plan that replaces EC2 or changes storage, review the plan and
 create a consistent EBS snapshot when appropriate.
@@ -277,12 +304,14 @@ Add `--follow` to keep streaming new events.
 ## Security and limitations
 
 - Secrets and Terraform variable files are ignored by Git.
+- The EC2 origin uses HTTP behind CloudFront. Traffic from users to CloudFront
+  is encrypted with HTTPS, while the origin is protected by the security group.
 - EBS volumes, snapshots, EC2, public IPv4 addresses, and other AWS resources
   can generate charges while they exist.
 - This is a development/portfolio architecture. PostgreSQL is self-managed on
   the same EC2 host as the API; a production evolution could use an Application
-  Load Balancer, HTTPS, managed DNS, Amazon RDS, automated backups, and a
-  high-availability architecture.
+  Load Balancer, end-to-end HTTPS, a custom domain with ACM, AWS WAF, Amazon
+  RDS, automated backups, and a high-availability architecture.
 
 ## Roadmap
 
@@ -295,5 +324,6 @@ Add `--follow` to keep streaming new events.
 - [x] Persistent PostgreSQL EBS and Parameter Store secret.
 - [x] Automated application deployment after publishing an image.
 - [x] Centralized logs, metrics, dashboard, and alarms.
-- [ ] HTTPS and stable DNS endpoint.
+- [x] HTTPS endpoint through CloudFront with direct EC2 access blocked.
+- [ ] Custom domain, ACM certificate, and AWS WAF.
 - [ ] Managed database and high-availability architecture.

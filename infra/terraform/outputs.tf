@@ -56,3 +56,13 @@ output "cloudwatch_alarm_names" {
     aws_cloudwatch_metric_alarm.ec2_status_check.alarm_name,
   ]
 }
+
+output "cloudfront_distribution_id" {
+  description = "ID of the CloudFront distribution serving the API"
+  value       = aws_cloudfront_distribution.api.id
+}
+
+output "api_https_url" {
+  description = "Stable HTTPS endpoint provided by CloudFront"
+  value       = "https://${aws_cloudfront_distribution.api.domain_name}"
+}

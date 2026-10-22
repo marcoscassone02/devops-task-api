@@ -8,7 +8,10 @@ Comandos y conceptos esenciales. Ejecutar desde la raíz del repositorio.
 GitHub Actions -> calidad -> imagen en GHCR -> despliegue OIDC + SSM
                                                       |
                                                       v
-EC2 -> Docker Compose -> FastAPI + Alembic + PostgreSQL
+Internet -> HTTPS 443 -> CloudFront -> HTTP 8000 -> EC2
+                                              |
+                                              v
+                         Docker Compose -> FastAPI + Alembic + PostgreSQL
           |                                  |
           v                                  v
    CloudWatch Logs                 EBS /data/postgres
@@ -26,6 +29,9 @@ EC2 -> Docker Compose -> FastAPI + Alembic + PostgreSQL
   exacto mediante OIDC y Systems Manager.
 - CloudWatch conserva los logs durante 7 días y muestra métricas y alarmas en
   el dashboard `devops-task-api-dev`.
+- CloudFront publica la API con HTTPS, sin cachear las respuestas dinámicas.
+- El Security Group permite el puerto 8000 únicamente desde los servidores de
+  origen de CloudFront. El acceso directo a la IP pública de EC2 está bloqueado.
 
 ## Docker local
 
@@ -131,6 +137,24 @@ AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform apply plan.tfplan
 AWS_PROFILE=devops-task-api terraform -chdir=infra/terraform output
 ```
 
+Obtener la URL pública HTTPS:
+
+```bash
+AWS_PROFILE=devops-task-api \
+terraform -chdir=infra/terraform output -raw api_https_url
+```
+
+Endpoints desplegados:
+
+```text
+https://d3b3z7x9hvekhc.cloudfront.net/docs
+https://d3b3z7x9hvekhc.cloudfront.net/health
+```
+
+CloudFront recibe HTTPS en el puerto 443 y reenvía HTTP al puerto 8000 de EC2.
+No redirige el navegador a la IP de la instancia. El Security Group acepta ese
+tráfico porque proviene de la lista administrada de direcciones de CloudFront.
+
 - `resource`: recurso que Terraform administra.
 - `data`: consulta información existente.
 - `variable`: dato configurable.
@@ -193,6 +217,7 @@ AWS_PROFILE=devops-task-api aws logs tail \
 ## Recordatorios
 
 - No confirmar `.env`, `*.tfvars`, estados ni planes de Terraform.
+- Acceder públicamente a la API mediante CloudFront, no mediante la IP de EC2.
 - No ejecutar `mkfs` sobre un volumen con datos.
 - Eliminar una EC2 no elimina el EBS persistente del proyecto.
 - El EBS raíz sí se elimina con la instancia.

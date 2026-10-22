@@ -9,7 +9,6 @@ services:
       options:
         awslogs-region: "${AWS_REGION:-us-east-1}"
         awslogs-group: "${CLOUDWATCH_LOG_GROUP:-/devops-task-api/dev/containers}"
-        awslogs-stream-prefix: api
         mode: non-blocking
         max-buffer-size: 4m
 
@@ -24,7 +23,6 @@ services:
       options:
         awslogs-region: "${AWS_REGION:-us-east-1}"
         awslogs-group: "${CLOUDWATCH_LOG_GROUP:-/devops-task-api/dev/containers}"
-        awslogs-stream-prefix: db
         mode: non-blocking
         max-buffer-size: 4m
 
@@ -37,6 +35,5 @@ services:
       options:
         awslogs-region: "${AWS_REGION:-us-east-1}"
         awslogs-group: "${CLOUDWATCH_LOG_GROUP:-/devops-task-api/dev/containers}"
-        awslogs-stream-prefix: migrate
         mode: non-blocking
         max-buffer-size: 4m

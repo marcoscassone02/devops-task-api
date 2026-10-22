@@ -1,9 +1,25 @@
 # DevOps Task API
 
+[![CI](https://github.com/marcoscassone02/devops-task-api/actions/workflows/ci.yml/badge.svg)](https://github.com/marcoscassone02/devops-task-api/actions/workflows/ci.yml)
+[![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/Docker-containerized-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Terraform](https://img.shields.io/badge/Terraform-IaC-844FBA?logo=terraform&logoColor=white)](https://www.terraform.io/)
+[![AWS](https://img.shields.io/badge/AWS-deployed-232F3E?logo=amazonwebservices&logoColor=white)](https://aws.amazon.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Task-management API built as a hands-on Cloud/DevOps portfolio project. The
 repository demonstrates application development, containerization, automated
 quality checks, image publication, infrastructure as code, secret management,
 and deployment to AWS.
+
+## Live demo
+
+- Interactive API documentation: <https://d3b3z7x9hvekhc.cloudfront.net/docs>
+- Health check: <https://d3b3z7x9hvekhc.cloudfront.net/health>
+- Published container image: [GitHub Container Registry](https://github.com/users/marcoscassone02/packages/container/package/devops-task-api)
+
+The public endpoint uses HTTPS through CloudFront. Direct access to the EC2
+origin is blocked by its security group.
 
 ## Architecture
 
@@ -191,6 +207,11 @@ through GitHub OIDC, sends the exact commit SHA to EC2 through Systems Manager,
 updates the containers, and verifies the `/health` endpoint. No permanent AWS
 access keys are stored in GitHub.
 
+```text
+Pull request -> quality + security checks
+Merge to main -> publish immutable image -> deploy through SSM -> health check
+```
+
 `compose.yaml` builds from local source. `compose.deploy.yaml` is an override
 used on EC2: it pulls the published image, binds `/data/postgres` to the
 PostgreSQL data directory, and sends container logs to CloudWatch.
@@ -327,3 +348,7 @@ Add `--follow` to keep streaming new events.
 - [x] HTTPS endpoint through CloudFront with direct EC2 access blocked.
 - [ ] Custom domain, ACM certificate, and AWS WAF.
 - [ ] Managed database and high-availability architecture.
+
+## License
+
+This project is available under the [MIT License](LICENSE).
